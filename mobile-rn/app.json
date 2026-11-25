@@ -2,7 +2,7 @@
   "expo": {
     "name": "OpenFicM Custom",
     "slug": "openficm",
-    "version": "0.16.1-custom",
+    "version": "0.16.2-custom",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -11,7 +11,7 @@
     },
     "android": {
       "package": "com.openfic.mobile.custom",
-      "versionCode": 22,
+      "versionCode": 30,
       "softwareKeyboardLayoutMode": "resize",
       "blockedPermissions": [
         "android.permission.READ_EXTERNAL_STORAGE",
