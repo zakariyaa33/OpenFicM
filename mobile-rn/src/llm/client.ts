@@ -7,6 +7,7 @@ import type { AgentMessage, AgentToolCall, AgentToolDefinition, ModelTurn } from
 import { MAX_CONFIGURED_OUTPUT_TOKENS, normalizeMaxOutputTokens } from "./limits";
 import { buildResponsesRequestBody, parseResponsesTurn } from "./responses-api";
 import { mergeRequestParameters } from "./request-parameters";
+import { beginApiDebug, finishApiDebug, type DebugContext } from "./api-debug";
 import { readSseStream, StreamFormatError, type StreamProtocol, type StreamReadResult } from "./sse";
 
 const CANCELLED_MESSAGE = "已取消本次请求";
@@ -211,6 +212,8 @@ async function requestJson(
   init: RequestInit,
   signal?: AbortSignal,
   streamProtocol?: StreamProtocol,
+  debugSelection?: ModelSelection,
+  debugContext?: DebugContext,
 ): Promise<Record<string, any>> {
   const settings = await getConnectionRetrySettings();
   const requestTimeout = settings.requestTimeoutMs;
@@ -238,19 +241,50 @@ async function requestJson(
     // 外部取消（例如后台蒸馏被用户中止）要立刻打断在途请求；AbortSignal.any 在 Hermes 上不保证可用，手动桥接。
     const abortFromCaller = () => controller.abort();
     signal?.addEventListener("abort", abortFromCaller, { once: true });
+    const debugId = debugSelection ? beginApiDebug({ model: debugSelection.model.modelId, provider: debugSelection.provider.name,
+      url, body: init.body, apiKey: debugSelection.apiKey, attempt: attempt + 1, context: debugContext }) : undefined;
+    const apiKey = debugSelection?.apiKey ?? "";
+    let debugStatus: number | undefined;
+    let debugRaw = "";
+    let debugTruncated = false;
+    let debugFormat: string | undefined;
+    let debugData: Record<string, any> | undefined;
+    const observe = debugId === undefined ? undefined : {
+      onRaw: (chunk: string) => {
+        const remaining = 165_000 - debugRaw.length;
+        if (remaining > 0) debugRaw += chunk.slice(0, remaining);
+        if (chunk.length > Math.max(0, remaining)) debugTruncated = true;
+      },
+      onEvent: (event: { data: string }) => {
+        try {
+          const data = JSON.parse(event.data);
+          const packet = data.response ?? data.message ?? data;
+          const usage = packet.usage ?? data.usage ?? data.usageMetadata;
+          const model = packet.model ?? data.model ?? data.modelVersion;
+          if (usage && typeof usage === "object") debugData = { ...debugData, usage: { ...debugData?.usage, ...usage } };
+          if (typeof model === "string") debugData = { ...debugData, model };
+        } catch { /* Non-JSON SSE events are expected. */ }
+      },
+    };
     try {
       // React Native 自带的 fetch 拿不到响应流，流式必须走 expo/fetch。
       const response = streamProtocol
         ? await streamingFetch(url, { ...init, signal: controller.signal })
         : await fetch(url, { ...init, signal: controller.signal });
+      debugStatus = response.status;
       if (streamProtocol && response.ok && response.body) {
+        debugFormat = "SSE";
         let streamed: StreamReadResult;
         try {
-          streamed = await readSseStream(response.body, streamProtocol, armTimeout);
+          streamed = await readSseStream(response.body, streamProtocol, armTimeout, observe);
         } catch (streamError) {
           if (streamError instanceof StreamFormatError) throw streamError;
           const reason = streamError instanceof Error ? streamError.message : String(streamError);
           throw new TransportError(`fetch failed: 响应流中断（${reason}）`);
+        }
+        if (debugId !== undefined) {
+          debugData = { ...streamed.data, ...debugData };
+          finishApiDebug(debugId, { apiKey, status: debugStatus, raw: debugRaw + (debugTruncated ? "\n[流式日志已截断]" : ""), format: debugFormat, data: debugData, error: streamed.error?.message });
         }
         if (!streamed.error) return streamed.data;
         const streamFailure = new Error(`模型服务返回失败：${streamed.error.message}`);
@@ -265,7 +299,12 @@ async function requestJson(
         continue;
       }
       const text = await response.text();
+      if (debugId !== undefined) { debugRaw = text; debugFormat = "JSON"; }
       const data = parseResponseText(text, response.ok);
+      if (debugId !== undefined) {
+        debugData = data;
+        finishApiDebug(debugId, { apiKey, status: debugStatus, raw: debugRaw, format: debugFormat, data, error: response.ok ? undefined : errorDetail(data, text, response.statusText) });
+      }
       if (response.ok) return data;
       const detail = errorDetail(data, text, response.statusText);
       const requestError = new Error(`HTTP ${response.status}: ${detail}`);
@@ -277,6 +316,7 @@ async function requestJson(
       if (!RETRYABLE_STATUS_CODES.has(response.status) || attempt + 1 >= maxAttempts) throw requestError;
       await sleep(retryDelay(response, attempt), signal);
     } catch (error) {
+      if (debugId !== undefined) finishApiDebug(debugId, { apiKey, status: debugStatus, raw: debugRaw || undefined, format: debugFormat, data: debugData, error: error instanceof Error ? error.message : String(error) });
       // 用户主动取消不是故障：不要重试，也不要报成超时或网络错误。
       if (signal?.aborted) throw new Error(CANCELLED_MESSAGE);
       // expo/fetch 的中止与连接失败不是 AbortError/TypeError，所以超时用自己的标记判断，
@@ -361,7 +401,7 @@ async function callOpenAi(
         tool_choice: "auto",
       } : {}),
     }, selection.model.requestJson)),
-  }, options?.signal, options?.stream ? "openai-chat" : undefined);
+  }, options?.signal, options?.stream ? "openai-chat" : undefined, selection, options?.debugContext);
   const choice = isRecord(data.choices?.[0]) ? data.choices[0] : {};
   const message = choice.message ?? {};
   const finishReason = typeof choice.finish_reason === "string" ? choice.finish_reason : "";
@@ -440,7 +480,7 @@ async function callOpenAiResponses(
       }),
       ...(options?.stream ? { stream: true } : {}),
     }, selection.model.requestJson)),
-  }, options?.signal, options?.stream ? "openai-responses" : undefined);
+  }, options?.signal, options?.stream ? "openai-responses" : undefined, selection, options?.debugContext);
   const turn = parseResponsesTurn(data);
   if (turn.failureMessage) throw new Error(`模型服务返回失败：${turn.failureMessage}`);
   if (turn.toolCalls.length && turn.incompleteReason === "max_output_tokens") {
@@ -612,7 +652,7 @@ async function callGemini(
         maxOutputTokens,
       },
     }, selection.model.requestJson)),
-  }, options?.signal, options?.stream ? "gemini" : undefined);
+  }, options?.signal, options?.stream ? "gemini" : undefined, selection, options?.debugContext);
   const parts: any[] = data.candidates?.[0]?.content?.parts ?? [];
   const finishReason = String(data.candidates?.[0]?.finishReason ?? "");
   if (!parts.length) {
@@ -691,7 +731,7 @@ async function callAnthropic(
         tools: tools.map((tool) => ({ name: tool.name, description: tool.description, input_schema: tool.parameters })),
       } : {}),
     }, selection.model.requestJson)),
-  }, options?.signal, options?.stream ? "anthropic" : undefined);
+  }, options?.signal, options?.stream ? "anthropic" : undefined, selection, options?.debugContext);
   const blocks: any[] = data.content ?? [];
   const content = blocks.filter((block) => block.type === "text").map((block) => block.text).join("");
   const toolCalls = blocks.filter((block) => block.type === "tool_use").map((block) => ({
@@ -717,6 +757,7 @@ export interface ModelCallOptions {
   signal?: AbortSignal;
   /** 是否流式接收；省略时按"连接"设置（默认开启）。 */
   stream?: boolean;
+  debugContext?: DebugContext;
 }
 
 function resolveOutputTokens(selection: ModelSelection, options?: ModelCallOptions): number {
