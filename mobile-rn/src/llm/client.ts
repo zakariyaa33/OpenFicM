@@ -6,6 +6,7 @@ import { getSetting } from "@/data/repositories";
 import type { AgentMessage, AgentToolCall, AgentToolDefinition, ModelTurn } from "./types";
 import { MAX_CONFIGURED_OUTPUT_TOKENS, normalizeMaxOutputTokens } from "./limits";
 import { buildResponsesRequestBody, parseResponsesTurn } from "./responses-api";
+import { mergeRequestParameters } from "./request-parameters";
 import { readSseStream, StreamFormatError, type StreamProtocol, type StreamReadResult } from "./sse";
 
 const CANCELLED_MESSAGE = "已取消本次请求";
@@ -331,7 +332,7 @@ async function callOpenAi(
       "Content-Type": "application/json",
       Authorization: `Bearer ${selection.apiKey}`,
     },
-    body: JSON.stringify({
+    body: JSON.stringify(mergeRequestParameters({
       model: selection.model.modelId,
       temperature: selection.model.temperature,
       max_tokens: maxOutputTokens,
@@ -359,7 +360,7 @@ async function callOpenAi(
         tools: tools.map((tool) => ({ type: "function", function: tool })),
         tool_choice: "auto",
       } : {}),
-    }),
+    }, selection.model.requestJson)),
   }, options?.signal, options?.stream ? "openai-chat" : undefined);
   const choice = isRecord(data.choices?.[0]) ? data.choices[0] : {};
   const message = choice.message ?? {};
@@ -428,7 +429,7 @@ async function callOpenAiResponses(
       "Content-Type": "application/json",
       Authorization: `Bearer ${selection.apiKey}`,
     },
-    body: JSON.stringify({
+    body: JSON.stringify(mergeRequestParameters({
       ...buildResponsesRequestBody({
         modelId: selection.model.modelId,
         instructions,
@@ -438,7 +439,7 @@ async function callOpenAiResponses(
         messages,
       }),
       ...(options?.stream ? { stream: true } : {}),
-    }),
+    }, selection.model.requestJson)),
   }, options?.signal, options?.stream ? "openai-responses" : undefined);
   const turn = parseResponsesTurn(data);
   if (turn.failureMessage) throw new Error(`模型服务返回失败：${turn.failureMessage}`);
@@ -589,7 +590,7 @@ async function callGemini(
   const data = await requestJson(url, {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-goog-api-key": selection.apiKey },
-    body: JSON.stringify({
+    body: JSON.stringify(mergeRequestParameters({
       systemInstruction: system ? { parts: [{ text: system }] } : undefined,
       contents: geminiContents(messages),
       ...(tools.length ? {
@@ -610,7 +611,7 @@ async function callGemini(
         temperature: selection.model.temperature,
         maxOutputTokens,
       },
-    }),
+    }, selection.model.requestJson)),
   }, options?.signal, options?.stream ? "gemini" : undefined);
   const parts: any[] = data.candidates?.[0]?.content?.parts ?? [];
   const finishReason = String(data.candidates?.[0]?.finishReason ?? "");
@@ -679,7 +680,7 @@ async function callAnthropic(
       "x-api-key": selection.apiKey,
       "anthropic-version": "2023-06-01",
     },
-    body: JSON.stringify({
+    body: JSON.stringify(mergeRequestParameters({
       model: selection.model.modelId,
       system,
       temperature: selection.model.temperature,
@@ -689,7 +690,7 @@ async function callAnthropic(
       ...(tools.length ? {
         tools: tools.map((tool) => ({ name: tool.name, description: tool.description, input_schema: tool.parameters })),
       } : {}),
-    }),
+    }, selection.model.requestJson)),
   }, options?.signal, options?.stream ? "anthropic" : undefined);
   const blocks: any[] = data.content ?? [];
   const content = blocks.filter((block) => block.type === "text").map((block) => block.text).join("");
