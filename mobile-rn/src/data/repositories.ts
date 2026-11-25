@@ -17,6 +17,7 @@ import type {
   WorldInfoEntry,
 } from "@/types";
 import { MAX_CONFIGURED_OUTPUT_TOKENS } from "@/llm/limits";
+import { parseRequestParameters } from "@/llm/request-parameters";
 
 import { getDatabase } from "./database";
 
@@ -703,8 +704,7 @@ export async function saveModel(input: Omit<Model, "id"> & { id?: string }): Pro
   const db = await getDatabase();
   const id = input.id ?? createId();
   const requestJson = input.requestJson?.trim() || "{}";
-  const requestParams: unknown = JSON.parse(requestJson);
-  if (!requestParams || typeof requestParams !== "object" || Array.isArray(requestParams)) throw new Error("高级请求参数必须是 JSON 对象");
+  parseRequestParameters(requestJson);
   const name = requiredText(input.name, "模型名称");
   const modelId = requiredText(input.modelId, "模型 ID");
   if (!Number.isFinite(input.temperature) || input.temperature < 0 || input.temperature > 2) throw new Error("温度必须在 0 到 2 之间");
