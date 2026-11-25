@@ -103,11 +103,11 @@ android {
 
     namespace 'com.openfic.mobile'
    defaultConfig {
-       applicationId 'com.openfic.mobile'
+       applicationId 'com.openfic.mobile.custom'
         minSdkVersion 28
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 29
-        versionName "0.16.0"
+        versionName "0.16.1-custom"
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
     }
