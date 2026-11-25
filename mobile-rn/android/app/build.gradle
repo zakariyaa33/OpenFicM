@@ -106,8 +106,8 @@ android {
        applicationId 'com.openfic.mobile.custom'
         minSdkVersion 28
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 29
-        versionName "0.16.1-custom"
+        versionCode 30
+        versionName "0.16.2-custom"
 
         buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"${findProperty('reactNativeReleaseLevel') ?: 'stable'}\""
     }
