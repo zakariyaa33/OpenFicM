@@ -42,7 +42,7 @@ jobs:
         run: |
           node --experimental-strip-types --input-type=module <<'NODE'
           import assert from 'node:assert/strict';
-          import { withDeepSeekEffort, deepSeekEffort, mergeRequestParameters } from './src/llm/request-parameters.ts';
+          import { withDeepSeekEffort, deepSeekEffort, mergeRequestParameters, applyChatDeepSeekEffort, supportsChatDeepSeekEffort, isChatDeepSeekEffort } from './src/llm/request-parameters.ts';
           for (const effort of ['default','off','low','high','max']) {
             const json = withDeepSeekEffort('{"top_p":0.9}', effort);
             assert.equal(deepSeekEffort(json), effort);
@@ -54,6 +54,20 @@ jobs:
             else { assert.deepEqual(out.thinking, {type:'enabled'}); assert.equal(out.reasoning_effort, effort); }
           }
           assert.throws(() => mergeRequestParameters({}, '{"messages":[]}'));
+          const saved = withDeepSeekEffort('{"top_p":0.9}', 'high');
+          assert.equal(applyChatDeepSeekEffort(saved, 'follow'), saved);
+          for (const effort of ['default','off','low','high','max']) {
+            const override = applyChatDeepSeekEffort(saved, effort);
+            assert.equal(deepSeekEffort(override), effort);
+            assert.equal(JSON.parse(override).top_p, 0.9);
+            assert.equal(deepSeekEffort(saved), 'high');
+            assert.equal(isChatDeepSeekEffort(effort), true);
+          }
+          assert.equal(isChatDeepSeekEffort('middle'), false);
+          const provider = {type:'openai-compatible',apiMode:'chat-completions',name:'DeepSeek',baseUrl:'https://api.deepseek.com/v1'};
+          assert.equal(supportsChatDeepSeekEffort('deepseek-v4-pro', provider), true);
+          assert.equal(supportsChatDeepSeekEffort('deepseek-v4-pro', {...provider,apiMode:'responses'}), false);
+          assert.equal(supportsChatDeepSeekEffort('gpt', {...provider,name:'OpenAI',baseUrl:'https://api.openai.com/v1'}), false);
           NODE
       - name: Build APK
         env:
