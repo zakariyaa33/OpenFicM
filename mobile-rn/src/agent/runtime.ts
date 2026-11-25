@@ -585,7 +585,7 @@ async function prepareHistory(
         input.selection,
         buildSummaryRequest(summary?.content ?? null, pending),
         [],
-        { signal: input.signal },
+        { signal: input.signal, debugContext: { agent: input.agent.name, stage: "历史摘要" } },
       );
       const content = normalizeSummaryContent(turn.content);
       if (!content) throw new Error("模型没有返回摘要内容");
@@ -693,7 +693,7 @@ async function runAgentLoop(input: LoopInput): Promise<LoopResult> {
       input.selection,
       messageTokenBudget === null ? outgoing : fitToolOutputs(outgoing, messageTokenBudget),
       tools,
-      { signal: input.signal },
+      { signal: input.signal, debugContext: { agent: input.agent.name, stage: iteration === 0 ? "分析任务" : "工具执行后继续" } },
     );
     messages.push({
       role: "assistant",
