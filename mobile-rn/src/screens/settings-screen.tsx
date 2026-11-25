@@ -19,6 +19,7 @@ import {
 } from "@/data/repositories";
 import { fetchProviderModels, type RemoteModel } from "@/llm/model-catalog";
 import { DEFAULT_MAX_OUTPUT_TOKENS, MAX_CONFIGURED_OUTPUT_TOKENS } from "@/llm/limits";
+import { DEEPSEEK_EFFORTS, deepSeekEffort, withDeepSeekEffort, parseRequestParameters } from "@/llm/request-parameters";
 import type { RootStackParamList } from "@/navigation/types";
 import { SettingsCategoryScreen, type SettingsCategory } from "@/screens/settings-category-screen";
 import { WebSearchSettingsScreen } from "@/screens/web-search-settings";
@@ -26,6 +27,39 @@ import { useAppStore } from "@/store/app-store";
 import { colors, radius, spacing } from "@/theme";
 import { themedStyles } from "@/themed-styles";
 import type { Model, OpenAiApiMode, Provider, ProviderType } from "@/types";
+
+
+const effortLabels = { default: "默认", off: "关闭", low: "低", high: "高", max: "最高" };
+function RequestOptions({ value, onChange, modelId, provider }: {
+  value: string; onChange: (value: string) => void; modelId: string; provider?: Provider;
+}) {
+  const isDeepSeek = provider?.type === "openai-compatible" && provider.apiMode !== "responses"
+    && /deepseek/i.test(modelId + " " + provider.baseUrl + " " + provider.name);
+  const selected = deepSeekEffort(value);
+  let validation = "";
+  try { parseRequestParameters(value); } catch (e) { validation = e instanceof Error ? e.message : String(e); }
+  return (
+    <View style={{ gap: spacing.md }}>
+      {isDeepSeek ? <>
+        <Text style={styles.fieldLabel}>思考强度（DeepSeek）</Text>
+        <View style={styles.providerChoices}>
+          {DEEPSEEK_EFFORTS.map((effort) => (
+            <Pressable key={effort} disabled={!!validation} accessibilityRole="button"
+              accessibilityState={{ selected: selected === effort, disabled: !!validation }}
+              onPress={() => onChange(withDeepSeekEffort(value, effort))}
+              style={[styles.choice, selected === effort && styles.choiceActive]}>
+              <Text style={[styles.choiceText, selected === effort && styles.choiceTextActive]}>{effortLabels[effort]}</Text>
+            </Pressable>
+          ))}
+        </View>
+        <Text style={styles.fieldHint}>实际支持的档位由模型服务商决定。默认不发送额外的思考参数。</Text>
+      </> : null}
+      <Field label="高级请求 JSON（可选）" value={value} onChangeText={onChange}
+        multiline autoCapitalize="none" autoCorrect={false} placeholder="{}" />
+      <Text style={styles.fieldHint}>{validation || "每个模型独立保存；例如 OpenAI reasoning_effort，或 Gemini generationConfig.thinkingConfig。不可覆盖消息、工具或输出上限等协议字段。"}</Text>
+    </View>
+  );
+}
 
 const providerDefaults: Record<ProviderType, { name: string; url: string }> = {
   "openai-compatible": { name: "OpenAI Compatible", url: "https://api.openai.com/v1" },
@@ -73,6 +107,7 @@ export function SettingsScreen() {
   const [modelName, setModelName] = useState("");
   const [modelId, setModelId] = useState("");
   const [temperature, setTemperature] = useState("0.8");
+  const [requestJson, setRequestJson] = useState("{}");
   const [maxTokens, setMaxTokens] = useState(String(DEFAULT_MAX_OUTPUT_TOKENS));
   const [saving, setSaving] = useState(false);
   const [savingModel, setSavingModel] = useState(false);
@@ -90,6 +125,7 @@ export function SettingsScreen() {
   const [editingModel, setEditingModel] = useState<Model | null>(null);
   const [editModelName, setEditModelName] = useState("");
   const [editModelTemperature, setEditModelTemperature] = useState("0.8");
+  const [editRequestJson, setEditRequestJson] = useState("{}");
   const [editModelMaxTokens, setEditModelMaxTokens] = useState(String(DEFAULT_MAX_OUTPUT_TOKENS));
   const [savingModelEdit, setSavingModelEdit] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -172,6 +208,7 @@ export function SettingsScreen() {
         providerId: selectedProviderId,
         name: modelName,
         modelId,
+        requestJson,
         temperature: parsedTemperature,
         maxTokens: parsedMaxTokens,
       });
@@ -227,10 +264,11 @@ export function SettingsScreen() {
 
   // 一键添加用的参数：优先用“添加模型”表单里已经填好的温度/Token，非法或没填就用默认值，
   // 这样从模型列表点一下即可入库，不必再滚到页面底部按“添加模型”。
-  const modelParams = (): { temperature: number; maxTokens: number } => {
+  const modelParams = (): { temperature: number; maxTokens: number; requestJson: string } => {
     const parsedTemperature = Number(temperature);
     const parsedMaxTokens = Number(maxTokens);
     return {
+      requestJson,
       temperature: Number.isFinite(parsedTemperature) && parsedTemperature >= 0 && parsedTemperature <= 2
         ? parsedTemperature
         : 0.8,
@@ -305,6 +343,7 @@ export function SettingsScreen() {
     setEditingModel(model);
     setEditModelName(model.name);
     setEditModelTemperature(String(model.temperature));
+    setEditRequestJson(model.requestJson || "{}");
     setEditModelMaxTokens(String(model.maxTokens));
     setError(null);
   };
@@ -329,6 +368,7 @@ export function SettingsScreen() {
         providerId: editingModel.providerId,
         name: editModelName,
         modelId: editingModel.modelId,
+        requestJson: editRequestJson,
         temperature: parsedTemperature,
         maxTokens: parsedMaxTokens,
       });
@@ -508,6 +548,7 @@ export function SettingsScreen() {
         <Field label="模型名称" value={modelName} onChangeText={setModelName} placeholder="Gemini 2.5 Pro" />
         <Field label="模型 ID" value={modelId} onChangeText={setModelId} autoCapitalize="none" placeholder="gemini-2.5-pro" />
         <Field label="温度" value={temperature} onChangeText={setTemperature} keyboardType="decimal-pad" />
+        <RequestOptions value={requestJson} onChange={setRequestJson} modelId={modelId} provider={providers.find((p) => p.id === selectedProviderId)} />
         <Field label="最大输出 Token 数" value={maxTokens} onChangeText={setMaxTokens} keyboardType="number-pad" />
         <Text style={styles.fieldHint}>单次回复长度，不是上下文窗口。写整章正文或使用思考型模型时建议 {DEFAULT_MAX_OUTPUT_TOKENS} 以上，太小会让工具调用被截断；供应商报“超出模型上限”时调回该模型支持的数值，最高 {MAX_CONFIGURED_OUTPUT_TOKENS}。</Text>
         <Button label="添加模型" onPress={() => void addModel()} disabled={!selectedProviderId || !modelName.trim() || !modelId.trim()} loading={savingModel} />
@@ -641,6 +682,8 @@ export function SettingsScreen() {
             <ScrollView style={styles.editSheetScroll} contentContainerStyle={styles.editSheetBody} keyboardShouldPersistTaps="handled">
               <Field label="模型名称" value={editModelName} onChangeText={setEditModelName} />
               <Field label="温度" value={editModelTemperature} onChangeText={setEditModelTemperature} keyboardType="decimal-pad" />
+              <RequestOptions value={editRequestJson} onChange={setEditRequestJson} modelId={editingModel?.modelId ?? ""} provider={providers.find((p) => p.id === editingModel?.providerId)} />
+              {error ? <ErrorNotice message={error} /> : null}
               <Field label="最大输出 Token 数" value={editModelMaxTokens} onChangeText={setEditModelMaxTokens} keyboardType="number-pad" />
               <Text style={styles.fieldHint}>模型 ID 不可改；单次回复长度上限、不是上下文窗口，最高 {MAX_CONFIGURED_OUTPUT_TOKENS}。</Text>
               <Button label="保存修改" onPress={() => void saveModelEdit()} disabled={!editModelName.trim()} loading={savingModelEdit} />
