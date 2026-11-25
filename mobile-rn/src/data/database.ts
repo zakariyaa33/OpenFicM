@@ -167,7 +167,8 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
       name TEXT NOT NULL,
       model_id TEXT NOT NULL,
       temperature REAL NOT NULL DEFAULT 0.8,
-      max_tokens INTEGER NOT NULL DEFAULT 4096
+      max_tokens INTEGER NOT NULL DEFAULT 4096,
+      request_json TEXT NOT NULL DEFAULT '{}'
     );
 
     CREATE TABLE IF NOT EXISTS chat_sessions (
@@ -445,6 +446,7 @@ async function migrate(database: SQLite.SQLiteDatabase): Promise<void> {
   `);
   await migrateChatSessions(database);
   await migrateProviders(database);
+  await ensureColumn(database, "models", "request_json", "TEXT NOT NULL DEFAULT '{}'");
   await migrateWorkspaceFeatures(database);
 }
 
