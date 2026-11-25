@@ -133,6 +133,7 @@ android {
         }
         standalone {
             initWith release
+            applicationIdSuffix '.test'
             signingConfig signingConfigs.debug
             debuggable false
             minifyEnabled false
