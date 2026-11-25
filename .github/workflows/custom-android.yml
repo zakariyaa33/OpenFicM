@@ -1,0 +1,79 @@
+name: Build custom Android APK
+on:
+  push:
+    branches: [custom-reasoning]
+    paths:
+      - 'mobile-rn/**'
+      - '.github/workflows/custom-android.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: custom-android-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: mobile-rn
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: mobile-rn/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - run: npm ci
+      - run: npm run type-check
+      - name: Verify DeepSeek presets
+        run: |
+          node --experimental-strip-types --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { withDeepSeekEffort, deepSeekEffort, mergeRequestParameters } from './src/llm/request-parameters.ts';
+          for (const effort of ['default','off','low','high','max']) {
+            const json = withDeepSeekEffort('{"top_p":0.9}', effort);
+            assert.equal(deepSeekEffort(json), effort);
+            const out = mergeRequestParameters({model:'deepseek-v4-pro',messages:[]}, json);
+            assert.equal(out.top_p, 0.9);
+            assert.equal(out.model, 'deepseek-v4-pro');
+            if (effort === 'default') assert.equal(out.thinking, undefined);
+            else if (effort === 'off') assert.deepEqual(out.thinking, {type:'disabled'});
+            else { assert.deepEqual(out.thinking, {type:'enabled'}); assert.equal(out.reasoning_effort, effort); }
+          }
+          assert.throws(() => mergeRequestParameters({}, '{"messages":[]}'));
+          NODE
+      - name: Build APK
+        env:
+          KEYSTORE_B64: ${{ secrets.CUSTOM_ANDROID_KEYSTORE_BASE64 }}
+          OPENFICM_RELEASE_STORE_PASSWORD: ${{ secrets.CUSTOM_ANDROID_STORE_PASSWORD }}
+          OPENFICM_RELEASE_KEY_ALIAS: ${{ secrets.CUSTOM_ANDROID_KEY_ALIAS }}
+          OPENFICM_RELEASE_KEY_PASSWORD: ${{ secrets.CUSTOM_ANDROID_KEY_PASSWORD }}
+        run: |
+          cd android
+          chmod +x gradlew
+          if [ -n "$KEYSTORE_B64" ]; then
+            export OPENFICM_RELEASE_STORE_FILE="$RUNNER_TEMP/openficm-custom.jks"
+            printf '%s' "$KEYSTORE_B64" | base64 --decode > "$OPENFICM_RELEASE_STORE_FILE"
+            chmod 600 "$OPENFICM_RELEASE_STORE_FILE"
+            trap 'rm -f "$OPENFICM_RELEASE_STORE_FILE"' EXIT
+            ./gradlew assembleRelease --no-daemon -PreactNativeArchitectures=arm64-v8a
+            mkdir -p "$RUNNER_TEMP/custom-apk"
+            cp app/build/outputs/apk/release/*.apk "$RUNNER_TEMP/custom-apk/"
+          else
+            unset OPENFICM_RELEASE_STORE_PASSWORD OPENFICM_RELEASE_KEY_ALIAS OPENFICM_RELEASE_KEY_PASSWORD
+            ./gradlew assembleStandalone --no-daemon -PreactNativeArchitectures=arm64-v8a
+            mkdir -p "$RUNNER_TEMP/custom-apk"
+            cp app/build/outputs/apk/standalone/*.apk "$RUNNER_TEMP/custom-apk/"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenFicM-Custom-APK
+          path: ${{ runner.temp }}/custom-apk/*.apk
+          if-no-files-found: error
