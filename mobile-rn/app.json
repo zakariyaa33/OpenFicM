@@ -1,8 +1,8 @@
 {
   "expo": {
-    "name": "OpenFicM",
+    "name": "OpenFicM Custom",
     "slug": "openficm",
-    "version": "0.16.0",
+    "version": "0.16.1-custom",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -10,7 +10,7 @@
       "supportsTablet": true
     },
     "android": {
-      "package": "com.openfic.mobile",
+      "package": "com.openfic.mobile.custom",
       "versionCode": 22,
       "softwareKeyboardLayoutMode": "resize",
       "blockedPermissions": [
