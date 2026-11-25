@@ -23,3 +23,28 @@ export function mergeRequestParameters(base: Record<string, unknown>, raw?: stri
   }
   return { ...base, ...extra };
 }
+
+export const DEEPSEEK_EFFORTS = ["default", "off", "low", "high", "max"] as const;
+export type DeepSeekEffort = typeof DEEPSEEK_EFFORTS[number];
+export function deepSeekEffort(raw?: string): DeepSeekEffort | "custom" {
+  try {
+    const value = parseRequestParameters(raw);
+    const thinking = value.thinking as { type?: unknown } | undefined;
+    const effort = value.reasoning_effort;
+    if (thinking?.type === "disabled") return "off";
+    if (thinking?.type === "enabled" && (effort === "low" || effort === "high" || effort === "max")) return effort;
+    if (thinking === undefined && effort === undefined) return "default";
+  } catch { /* Invalid draft is not a preset. */ }
+  return "custom";
+}
+export function withDeepSeekEffort(raw: string, effort: DeepSeekEffort): string {
+  const value = parseRequestParameters(raw);
+  delete value.thinking;
+  delete value.reasoning_effort;
+  if (effort === "off") value.thinking = { type: "disabled" };
+  else if (effort !== "default") {
+    value.thinking = { type: "enabled" };
+    value.reasoning_effort = effort;
+  }
+  return JSON.stringify(value, null, 2);
+}
