@@ -19,6 +19,14 @@ jobs:
       run:
         working-directory: mobile-rn
     steps:
+      - name: Require permanent signing secret
+        env:
+          SIGNING_BUNDLE: ${{ secrets.CUSTOM_ANDROID_SIGNING_BUNDLE }}
+        run: |
+          if [ -z "$SIGNING_BUNDLE" ]; then
+            echo "::error::Configure the CUSTOM_ANDROID_SIGNING_BUNDLE repository Actions secret before rerunning this workflow."
+            exit 1
+          fi
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
@@ -96,31 +104,60 @@ jobs:
           setApiDebugEnabled(false);
           assert.equal(getApiDebugEntries().length,0);
           NODE
-      - name: Build APK
+      - name: Build permanently signed APK
         env:
-          KEYSTORE_B64: ${{ secrets.CUSTOM_ANDROID_KEYSTORE_BASE64 }}
-          OPENFICM_RELEASE_STORE_PASSWORD: ${{ secrets.CUSTOM_ANDROID_STORE_PASSWORD }}
-          OPENFICM_RELEASE_KEY_ALIAS: ${{ secrets.CUSTOM_ANDROID_KEY_ALIAS }}
-          OPENFICM_RELEASE_KEY_PASSWORD: ${{ secrets.CUSTOM_ANDROID_KEY_PASSWORD }}
+          SIGNING_BUNDLE: ${{ secrets.CUSTOM_ANDROID_SIGNING_BUNDLE }}
+          EXPECTED_CERT_SHA256: "445c46a1e66a75685a81cee566088b075f0627ec0d22b0c05ae2b9152ac7a947"
         run: |
-          cd android
-          chmod +x gradlew
-          if [ -n "$KEYSTORE_B64" ]; then
-            export OPENFICM_RELEASE_STORE_FILE="$RUNNER_TEMP/openficm-custom.jks"
-            printf '%s' "$KEYSTORE_B64" | base64 --decode > "$OPENFICM_RELEASE_STORE_FILE"
-            chmod 600 "$OPENFICM_RELEASE_STORE_FILE"
-            trap 'rm -f "$OPENFICM_RELEASE_STORE_FILE"' EXIT
-            ./gradlew assembleRelease --no-daemon -PreactNativeArchitectures=arm64-v8a
-            mkdir -p "$RUNNER_TEMP/custom-apk"
-            cp app/build/outputs/apk/release/*.apk "$RUNNER_TEMP/custom-apk/"
-          else
-            unset OPENFICM_RELEASE_STORE_PASSWORD OPENFICM_RELEASE_KEY_ALIAS OPENFICM_RELEASE_KEY_PASSWORD
-            ./gradlew assembleStandalone --no-daemon -PreactNativeArchitectures=arm64-v8a
-            mkdir -p "$RUNNER_TEMP/custom-apk"
-            cp app/build/outputs/apk/standalone/*.apk "$RUNNER_TEMP/custom-apk/"
-          fi
+          python3 - <<'PY'
+          import base64, hashlib, json, os, pathlib, re, shutil, subprocess, tempfile
+          os.umask(0o077)
+          try:
+              bundle = json.loads(os.environ["SIGNING_BUNDLE"])
+              binary = base64.b64decode(bundle["keystore_b64"], validate=True)
+              password, alias = bundle["password"], bundle["alias"]
+              assert isinstance(password, str) and re.fullmatch(r"[A-Za-z0-9_-]{20,128}", password)
+              assert alias == "openficm-custom"
+          except Exception:
+              raise SystemExit("Invalid signing bundle. Use the original secret backup.")
+          print("::add-mask::" + password, flush=True)
+          print("::add-mask::" + bundle["keystore_b64"], flush=True)
+          expected = os.environ["EXPECTED_CERT_SHA256"]
+          with tempfile.TemporaryDirectory(dir=os.environ["RUNNER_TEMP"]) as temp:
+              keystore = pathlib.Path(temp) / "openficm-custom.p12"
+              keystore.write_bytes(binary)
+              env = dict(os.environ)
+              env.pop("SIGNING_BUNDLE", None)
+              env.update(OPENFICM_RELEASE_STORE_FILE=str(keystore),
+                         OPENFICM_RELEASE_STORE_PASSWORD=password,
+                         OPENFICM_RELEASE_KEY_ALIAS=alias,
+                         OPENFICM_RELEASE_KEY_PASSWORD=password)
+              cert = subprocess.check_output(["keytool", "-exportcert", "-alias", alias, "-keystore", str(keystore), "-storetype", "PKCS12", "-storepass:env", "OPENFICM_RELEASE_STORE_PASSWORD"], env=env)
+              if hashlib.sha256(cert).hexdigest() != expected:
+                  raise SystemExit("Unexpected signing certificate. Refusing to build with a different key.")
+              print("Permanent signing certificate verified: " + expected, flush=True)
+              android = pathlib.Path("android").resolve()
+              (android / "gradlew").chmod(0o755)
+              subprocess.run(["./gradlew", "assembleRelease", "--no-daemon", "-PreactNativeArchitectures=arm64-v8a"], cwd=android, env=env, check=True)
+              signers = list((pathlib.Path(os.environ["ANDROID_HOME"]) / "build-tools").glob("*/apksigner"))
+              if not signers:
+                  raise SystemExit("apksigner not found")
+              signer = max(signers, key=lambda p: tuple(int(x) for x in re.findall(r"\d+", p.parent.name)))
+              out = pathlib.Path(os.environ["RUNNER_TEMP"]) / "custom-apk"
+              out.mkdir(exist_ok=True)
+              apks = list((android / "app/build/outputs/apk/release").glob("*.apk"))
+              if len(apks) != 1:
+                  raise SystemExit("Expected exactly one signed APK")
+              for apk in apks:
+                  verify = subprocess.check_output([str(signer), "verify", "--print-certs", str(apk)], text=True)
+                  digests = re.findall(r"certificate SHA-256 digest:\s*([0-9a-fA-F]{64})", verify)
+                  if [d.lower() for d in digests] != [expected]:
+                      raise SystemExit("APK certificate mismatch; not uploading.")
+                  print(verify)
+                  shutil.copy2(apk, out / "OpenFicM-Custom-signed.apk")
+          PY
       - uses: actions/upload-artifact@v4
         with:
-          name: OpenFicM-Custom-APK
+          name: OpenFicM-Custom-Signed-APK
           path: ${{ runner.temp }}/custom-apk/*.apk
           if-no-files-found: error
