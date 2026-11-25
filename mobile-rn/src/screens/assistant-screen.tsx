@@ -50,6 +50,7 @@ import {
 import { deleteAttachment, getSessionPlan, listAttachments } from "@/data/workspace-repositories";
 import { pickAttachment } from "@/lib/attachments";
 import { planProgress } from "@/agent/plan";
+import { CHAT_DEEPSEEK_EFFORTS, applyChatDeepSeekEffort, deepSeekEffort, isChatDeepSeekEffort, supportsChatDeepSeekEffort, type ChatDeepSeekEffort } from "@/llm/request-parameters";
 import type { RootTabParamList } from "@/navigation/types";
 import { getAgentDefinitions } from "@/settings/config";
 import { listStyleProfileOptions, type StyleProfileOption } from "@/style/profile-options";
@@ -79,6 +80,13 @@ function requestToolApproval(name: string, args: Record<string, unknown>): Promi
       { text: "允许一次", onPress: () => resolve(true) },
     ], { cancelable: false });
   });
+}
+
+const chatEffortLabels: Record<ChatDeepSeekEffort, string> = {
+  follow: "跟随模型", default: "服务端默认", off: "关闭", low: "低", high: "高", max: "最高",
+};
+function chatEffortKey(sessionId: string, modelId: string): string {
+  return `assistant.reasoning.${sessionId}.${modelId}`;
 }
 
 function activeSessionSettingKey(projectId: string): string {
@@ -218,6 +226,8 @@ export function AssistantScreen() {
   const [error, setError] = useState<string | null>(null);
   const [sessionPickerVisible, setSessionPickerVisible] = useState(false);
   const [modelPickerVisible, setModelPickerVisible] = useState(false);
+  const [effortPickerVisible, setEffortPickerVisible] = useState(false);
+  const [chatEfforts, setChatEfforts] = useState<Record<string, ChatDeepSeekEffort>>({});
   const [stylePickerVisible, setStylePickerVisible] = useState(false);
   const [updatingStyle, setUpdatingStyle] = useState(false);
   const [liveTrace, setLiveTrace] = useState<AgentRunTrace | null>(null);
@@ -243,6 +253,39 @@ export function AssistantScreen() {
   const atBottomRef = useRef(true);
   const pinToBottomRef = useRef(true);
   const providerById = useMemo(() => new Map(providers.map((provider) => [provider.id, provider])), [providers]);
+  const effortKey = activeSession && selection && supportsChatDeepSeekEffort(selection.model.modelId, selection.provider)
+    ? chatEffortKey(activeSession.id, selection.model.id) : null;
+  const chatEffort = effortKey ? chatEfforts[effortKey] : undefined;
+  const savedEffort = deepSeekEffort(selection?.model.requestJson);
+  const effectiveEffortLabel = chatEffort === "follow"
+    ? (savedEffort === "custom" ? "模型自定义" : savedEffort === "default" ? "默认" : chatEffortLabels[savedEffort])
+    : chatEffort ? chatEffortLabels[chatEffort] : "加载中";
+
+  useEffect(() => {
+    if (!effortKey || chatEfforts[effortKey] !== undefined) return;
+    let cancelled = false;
+    void getSetting(effortKey).then((value) => {
+      if (cancelled) return;
+      setChatEfforts((current) => current[effortKey] === undefined
+        ? { ...current, [effortKey]: isChatDeepSeekEffort(value) ? value : "follow" }
+        : current);
+    }).catch(() => {
+      if (!cancelled) setChatEfforts((current) => current[effortKey] === undefined
+        ? { ...current, [effortKey]: "follow" } : current);
+    });
+    return () => { cancelled = true; };
+  }, [effortKey, chatEfforts]);
+
+  useEffect(() => { setEffortPickerVisible(false); }, [effortKey]);
+
+  const chooseChatEffort = (effort: ChatDeepSeekEffort) => {
+    if (!effortKey || sending) return;
+    setChatEfforts((current) => ({ ...current, [effortKey]: effort }));
+    setEffortPickerVisible(false);
+    void setSetting(effortKey, effort).catch((e) => {
+      setError("思考强度已在本次会话生效，但保存失败：" + (e instanceof Error ? e.message : String(e)));
+    });
+  };
 
   const cancelPendingQuestion = useCallback(() => {
     const resolver = questionResolverRef.current;
@@ -655,6 +698,15 @@ export function AssistantScreen() {
       runSelection = selection
         ?? (retry?.modelId ? await resolveSelection(retry.modelId, models, providers) : null);
       if (!runSelection) throw new Error("请先配置可用模型");
+      // Freeze the override at Send; tool calls and retries in this run use the same selection.
+      if (supportsChatDeepSeekEffort(runSelection.model.modelId, runSelection.provider)) {
+        const key = chatEffortKey(sessionId, runSelection.model.id);
+        const configured = chatEfforts[key] ?? await getSetting(key);
+        const effort = isChatDeepSeekEffort(configured) ? configured : "follow";
+        runSelection = { ...runSelection, model: { ...runSelection.model,
+          requestJson: applyChatDeepSeekEffort(runSelection.model.requestJson, effort),
+        } };
+      }
       if (retry?.sourceMessageId) {
         await deleteMessagesFrom(sessionId, retry.sourceMessageId);
         if (!isCurrentRequest()) return;
@@ -1022,6 +1074,17 @@ export function AssistantScreen() {
               </Pressable>
             </View>
           ) : null}
+          {effortKey ? (
+            <View style={styles.effortBar}>
+              <Pressable accessibilityRole="button" accessibilityLabel="切换思考强度"
+                disabled={sending || !chatEffort} onPress={() => setEffortPickerVisible(true)}
+                style={[styles.effortButton, (sending || !chatEffort) && styles.sendDisabled]}>
+                <Ionicons name="bulb-outline" size={17} color={colors.primary} />
+                <Text style={styles.effortText}>思考：{effectiveEffortLabel}</Text>
+                <Ionicons name="chevron-down" size={14} color={colors.textMuted} />
+              </Pressable>
+            </View>
+          ) : null}
           <View style={styles.composerRow}>
             <Pressable
               accessibilityLabel="添加附件"
@@ -1148,6 +1211,39 @@ export function AssistantScreen() {
           </View>
         </SheetBackdrop>
       </Modal>
+      <Modal visible={effortPickerVisible && !!effortKey} transparent animationType="slide" onRequestClose={() => setEffortPickerVisible(false)}>
+        <SheetBackdrop onPress={() => setEffortPickerVisible(false)}>
+          <View style={styles.sheet}>
+            <View style={styles.sheetHeader}>
+              <View style={styles.sheetTitleWrap}>
+                <Text style={styles.sheetTitle}>思考强度</Text>
+                <Text style={styles.sheetSubtitle}>当前对话和模型 · 下次发送生效</Text>
+              </View>
+              <Pressable accessibilityLabel="关闭思考强度列表" onPress={() => setEffortPickerVisible(false)} style={styles.iconButton}>
+                <Ionicons name="close" size={24} color={colors.textMuted} />
+              </Pressable>
+            </View>
+            <FlatList
+              data={CHAT_DEEPSEEK_EFFORTS}
+              keyExtractor={(item) => item}
+              style={styles.sheetListScroll}
+              contentContainerStyle={styles.sheetList}
+              renderItem={({ item }) => (
+                <Pressable accessibilityRole="button" accessibilityState={{ selected: chatEffort === item }}
+                  disabled={sending} onPress={() => chooseChatEffort(item)}
+                  style={[styles.sheetRow, chatEffort === item && styles.sheetRowActive]}>
+                  <Ionicons name={chatEffort === item ? "radio-button-on" : "radio-button-off"} size={20}
+                    color={chatEffort === item ? colors.primary : colors.textMuted} />
+                  <View style={styles.sheetRowText}>
+                    <Text style={styles.sheetRowTitle}>{chatEffortLabels[item]}</Text>
+                    <Text style={styles.sheetRowMeta}>{item === "follow" ? "保留模型设置" : item === "default" ? "不发送思考控制参数" : item === "off" ? "关闭思考模式" : `reasoning_effort: ${item}`}</Text>
+                  </View>
+                </Pressable>
+              )}
+            />
+          </View>
+        </SheetBackdrop>
+      </Modal>
       <StyleProfilePickerSheet
         visible={stylePickerVisible}
         subtitle={project?.title ?? "当前作品"}
@@ -1259,6 +1355,9 @@ const styles = themedStyles((colors) => StyleSheet.create({
   errorDetailsText: { color: colors.textMuted, fontSize: 12, lineHeight: 17 },
   composer: { gap: spacing.xs, padding: spacing.md, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border, backgroundColor: colors.surface },
   composerRow: { flexDirection: "row", alignItems: "flex-end", gap: spacing.sm },
+  effortBar: { flexDirection: "row", alignItems: "center" },
+  effortButton: { minHeight: 36, flexDirection: "row", alignItems: "center", gap: spacing.xs, paddingHorizontal: spacing.sm, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border },
+  effortText: { color: colors.primary, fontSize: 13, fontWeight: "600" },
   editingBanner: { minHeight: 36, flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
   editingCopy: { flexDirection: "row", alignItems: "center", gap: spacing.xs },
   editingText: { color: colors.primary, fontSize: 13, fontWeight: "600" },
