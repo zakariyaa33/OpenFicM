@@ -48,3 +48,17 @@ export function withDeepSeekEffort(raw: string, effort: DeepSeekEffort): string 
   }
   return JSON.stringify(value, null, 2);
 }
+
+/** Chat overrides never mutate the saved model. "follow" keeps its entire configuration. */
+export type ChatDeepSeekEffort = "follow" | DeepSeekEffort;
+export const CHAT_DEEPSEEK_EFFORTS: readonly ChatDeepSeekEffort[] = ["follow", ...DEEPSEEK_EFFORTS];
+export function isChatDeepSeekEffort(value: unknown): value is ChatDeepSeekEffort {
+  return typeof value === "string" && (CHAT_DEEPSEEK_EFFORTS as readonly string[]).includes(value);
+}
+export function supportsChatDeepSeekEffort(modelId: string, provider: { type: string; apiMode?: string; baseUrl: string; name: string }): boolean {
+  return provider.type === "openai-compatible" && provider.apiMode !== "responses"
+    && /deepseek/i.test(modelId + " " + provider.baseUrl + " " + provider.name);
+}
+export function applyChatDeepSeekEffort(raw: string | undefined, effort: ChatDeepSeekEffort): string | undefined {
+  return effort === "follow" ? raw : withDeepSeekEffort(raw || "{}", effort);
+}
