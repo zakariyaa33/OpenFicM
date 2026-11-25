@@ -20,6 +20,7 @@ import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { AgentRunError, runAgent } from "@/agent/runtime";
 import { buildExecutionRecordMessage, summarizeExecutionRecord } from "@/agent/execution-record";
 import { AgentQuestionSheet, AgentTraceView } from "@/components/agent-run-view";
+import { ApiDebugPanel } from "@/components/api-debug-panel";
 import { MessageActionBar } from "@/components/message-action-bar";
 import { MarkdownView } from "@/components/markdown-view";
 import { Button, EmptyState, ErrorNotice, Header, Screen, SheetBackdrop } from "@/components/ui";
@@ -227,6 +228,7 @@ export function AssistantScreen() {
   const [sessionPickerVisible, setSessionPickerVisible] = useState(false);
   const [modelPickerVisible, setModelPickerVisible] = useState(false);
   const [effortPickerVisible, setEffortPickerVisible] = useState(false);
+  const [apiDebugVisible, setApiDebugVisible] = useState(false);
   const [chatEfforts, setChatEfforts] = useState<Record<string, ChatDeepSeekEffort>>({});
   const [stylePickerVisible, setStylePickerVisible] = useState(false);
   const [updatingStyle, setUpdatingStyle] = useState(false);
@@ -879,6 +881,9 @@ export function AssistantScreen() {
         title="创作助手"
         action={
           <View style={styles.headerActions}>
+            <Pressable accessibilityLabel="API 调试" onPress={() => setApiDebugVisible(true)} style={styles.iconButton}>
+              <Ionicons name="bug-outline" size={22} color={colors.primary} />
+            </Pressable>
             <Pressable accessibilityLabel="新建对话" disabled={sending} onPress={() => void newSession()} style={styles.iconButton}>
               <Ionicons name="create-outline" size={22} color={colors.primary} />
             </Pressable>
@@ -1244,6 +1249,7 @@ export function AssistantScreen() {
           </View>
         </SheetBackdrop>
       </Modal>
+      <ApiDebugPanel visible={apiDebugVisible} onClose={() => setApiDebugVisible(false)} />
       <StyleProfilePickerSheet
         visible={stylePickerVisible}
         subtitle={project?.title ?? "当前作品"}
