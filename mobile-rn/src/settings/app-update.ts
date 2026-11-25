@@ -2,7 +2,7 @@ import appConfig from "../../app.json";
 
 import { getSetting, setSetting } from "@/data/repositories";
 
-const REPOSITORY = "tioners/OpenFicM";
+const REPOSITORY = "zakariyaa33/OpenFicM";
 const RELEASE_API = `https://api.github.com/repos/${REPOSITORY}/releases/latest`;
 const RELEASE_PAGE = `https://github.com/${REPOSITORY}/releases`;
 const LAST_CHECK_KEY = "app.update.lastCheck";
