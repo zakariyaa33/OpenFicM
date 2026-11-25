@@ -69,6 +69,33 @@ jobs:
           assert.equal(supportsChatDeepSeekEffort('deepseek-v4-pro', {...provider,apiMode:'responses'}), false);
           assert.equal(supportsChatDeepSeekEffort('gpt', {...provider,name:'OpenAI',baseUrl:'https://api.openai.com/v1'}), false);
           NODE
+      - name: Verify local API diagnostics
+        run: |
+          node --experimental-strip-types --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { beginApiDebug, finishApiDebug, setApiDebugEnabled, getApiDebugEntries, clearApiDebug } from './src/llm/api-debug.ts';
+          const input = { model:'test-model', provider:'Test', url:'https://example.test/v1/chat/completions?key=test-secret', body:JSON.stringify({model:'test-model',reasoning_effort:'low',api_key:'test-secret'}), apiKey:'test-secret', attempt:1, context:{agent:'Build',stage:'分析任务'} };
+          assert.equal(beginApiDebug(input), undefined);
+          assert.equal(getApiDebugEntries().length, 0);
+          setApiDebugEnabled(true);
+          const id = beginApiDebug(input);
+          assert.equal(getApiDebugEntries()[0].context.agent, 'Build');
+          assert.equal(JSON.parse(getApiDebugEntries()[0].request).reasoning_effort, 'low');
+          finishApiDebug(id, {apiKey:'test-secret',status:200,raw:JSON.stringify({message:'Bearer test-secret'}),format:'JSON',data:{model:'returned-model',usage:{prompt_tokens:12,completion_tokens:8}}});
+          const entry = getApiDebugEntries()[0];
+          assert.equal(entry.returnedModel, 'returned-model');
+          assert.equal(entry.usage.prompt_tokens, 12);
+          assert.equal(entry.httpStatus, 200);
+          assert.ok(!JSON.stringify(entry).includes('test-secret'));
+          for(let i=0;i<25;i++) beginApiDebug(input);
+          assert.equal(getApiDebugEntries().length,20);
+          clearApiDebug();
+          finishApiDebug(id,{apiKey:'test-secret',raw:'not restored'});
+          assert.equal(getApiDebugEntries().length,0);
+          beginApiDebug(input);
+          setApiDebugEnabled(false);
+          assert.equal(getApiDebugEntries().length,0);
+          NODE
       - name: Build APK
         env:
           KEYSTORE_B64: ${{ secrets.CUSTOM_ANDROID_KEYSTORE_BASE64 }}
