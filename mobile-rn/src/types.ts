@@ -158,6 +158,7 @@ export interface Model {
   modelId: string;
   temperature: number;
   maxTokens: number;
+  requestJson?: string;
 }
 
 export interface ChatSession {
