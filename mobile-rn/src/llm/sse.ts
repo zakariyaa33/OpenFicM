@@ -327,12 +327,14 @@ export async function readSseStream(
   body: ReadableStream<Uint8Array>,
   protocol: StreamProtocol,
   onChunk?: () => void,
+  debug?: { onRaw: (chunk: string) => void; onEvent: (event: SseEvent) => void },
 ): Promise<StreamReadResult> {
   const accumulator = createStreamAccumulator(protocol);
   let events = 0;
   let raw = "";
   const parser = createSseParser((event) => {
     events += 1;
+    debug?.onEvent(event);
     accumulator.push(event);
   });
   const decoder = new TextDecoder();
@@ -343,11 +345,13 @@ export async function readSseStream(
       if (done) break;
       onChunk?.();
       const text = decoder.decode(value, { stream: true });
+      debug?.onRaw(text);
       if (!events && raw.length < MAX_RAW_FALLBACK_CHARACTERS) raw += text;
       parser.feed(text);
     }
     const tail = decoder.decode();
     if (tail) {
+      debug?.onRaw(tail);
       if (!events) raw += tail;
       parser.feed(tail);
     }
