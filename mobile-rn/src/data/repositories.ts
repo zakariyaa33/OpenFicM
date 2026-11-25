@@ -27,7 +27,7 @@ type ProjectRow = { id: string; title: string; description: string; created_at: 
 type VolumeRow = { id: string; project_id: string; title: string; order_index: number };
 type ChapterRow = { id: string; project_id: string; volume_id: string; title: string; content: string; order_index: number; updated_at: string };
 type ProviderRow = { id: string; name: string; type: ProviderType; base_url: string; api_mode: string | null; api_key_ref: string; created_at: string };
-type ModelRow = { id: string; provider_id: string; name: string; model_id: string; temperature: number; max_tokens: number };
+type ModelRow = { id: string; provider_id: string; name: string; model_id: string; temperature: number; max_tokens: number; request_json: string };
 type SessionRow = { id: string; project_id: string; title: string; model_id: string | null; created_at: string; updated_at: string };
 type MessageRow = {
   id: string;
@@ -86,7 +86,7 @@ const mapProvider = (row: ProviderRow): Provider => ({
 });
 const mapModel = (row: ModelRow): Model => ({
   id: row.id, providerId: row.provider_id, name: row.name, modelId: row.model_id,
-  temperature: row.temperature, maxTokens: row.max_tokens,
+  temperature: row.temperature, maxTokens: row.max_tokens, requestJson: row.request_json ?? "{}",
 });
 const mapSession = (row: SessionRow): ChatSession => ({
   id: row.id, projectId: row.project_id, title: row.title, modelId: row.model_id,
@@ -702,6 +702,9 @@ export async function listModels(providerId?: string): Promise<Model[]> {
 export async function saveModel(input: Omit<Model, "id"> & { id?: string }): Promise<Model> {
   const db = await getDatabase();
   const id = input.id ?? createId();
+  const requestJson = input.requestJson?.trim() || "{}";
+  const requestParams: unknown = JSON.parse(requestJson);
+  if (!requestParams || typeof requestParams !== "object" || Array.isArray(requestParams)) throw new Error("高级请求参数必须是 JSON 对象");
   const name = requiredText(input.name, "模型名称");
   const modelId = requiredText(input.modelId, "模型 ID");
   if (!Number.isFinite(input.temperature) || input.temperature < 0 || input.temperature > 2) throw new Error("温度必须在 0 到 2 之间");
@@ -721,13 +724,13 @@ export async function saveModel(input: Omit<Model, "id"> & { id?: string }): Pro
   }
   await db.withExclusiveTransactionAsync(async (txn) => {
     await txn.runAsync(`
-      INSERT INTO models(id, provider_id, name, model_id, temperature, max_tokens)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO models(id, provider_id, name, model_id, temperature, max_tokens, request_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET provider_id = excluded.provider_id, name = excluded.name,
-        model_id = excluded.model_id, temperature = excluded.temperature, max_tokens = excluded.max_tokens
-    `, id, input.providerId, name, modelId, input.temperature, input.maxTokens);
+        model_id = excluded.model_id, temperature = excluded.temperature, max_tokens = excluded.max_tokens, request_json = excluded.request_json
+    `, id, input.providerId, name, modelId, input.temperature, input.maxTokens, requestJson);
   });
-  return { id, providerId: input.providerId, name, modelId, temperature: input.temperature, maxTokens: input.maxTokens };
+  return { id, providerId: input.providerId, name, modelId, temperature: input.temperature, maxTokens: input.maxTokens, requestJson };
 }
 
 export async function listChatSessions(projectId: string): Promise<ChatSession[]> {
